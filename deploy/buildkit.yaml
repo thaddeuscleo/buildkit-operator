@@ -1,0 +1,8 @@
+apiVersion: buildkit.cleoverse.net/v1alpha1
+kind: BuildKit
+metadata:
+  name: example
+  namespace: default
+spec:
+  image: moby/buildkit:rootless
+  replicas: 1
