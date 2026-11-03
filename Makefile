@@ -13,5 +13,11 @@ test: ## Run unit tests
 fmt: ## Format Rust source code
 	cargo fmt
 
+dev: ## Run Operator Server
+	cargo run --bin buildkit-operator
+
+gen-crd: ## Generate JSON CRD
+	cargo run --bin crdgen > deploy/crd.json
+
 apply-crd: gen-crd ## Generate and apply CRD to Kubernetes
 	kubectl apply -f deploy/crd.json

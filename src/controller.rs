@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use kube::{
-    Api, Client, ResourceExt,
+    Api, Client, Resource, ResourceExt,
     api::{Patch, PatchParams},
     runtime::{Controller, controller::Action, watcher::Config},
 };
@@ -57,7 +57,11 @@ pub async fn reconcile(buildkit: Arc<BuildKit>, ctx: Arc<Context>) -> Result<Act
             "status": desired_status,
         });
         buildkits
-            .patch_status(&name, &PatchParams::apply(FIELD_MANAGER).force(), &Patch::Apply(&patch))
+            .patch_status(
+                &name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(&patch),
+            )
             .await?;
         info!("updated status");
     } else {
