@@ -1,129 +1,91 @@
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
-use std::{sync::Arc, time::Duration};
-
 use kube::{
-    Api, Client,
+    Api, Client, ResourceExt,
     api::{Patch, PatchParams},
     runtime::{Controller, controller::Action, watcher::Config},
 };
+use std::{sync::Arc, time::Duration};
+use tracing::{debug, error, info, instrument};
 
 use crate::crd::buildkit::BuildKit;
 
-#[derive(Clone)]
+const FIELD_MANAGER: &str = "buildkit-operator";
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Kubernetes API error: {0}")]
+    Kube(#[from] kube::Error),
+    #[error("BuildKit is missing metadata.{0}")]
+    MissingField(&'static str),
+}
+
 pub struct Context {
     pub client: Client,
 }
 
-pub async fn reconcile(buildkit: Arc<BuildKit>, ctx: Arc<Context>) -> Result<Action, kube::Error> {
-    let deployment = crate::resources::deployment::build_deployment(&buildkit);
-    let deployment_name = deployment
-        .metadata
-        .name
-        .as_deref()
-        .expect("Deployment name must exist");
+#[instrument(skip_all, fields(name = %buildkit.name_any()))]
+pub async fn reconcile(buildkit: Arc<BuildKit>, ctx: Arc<Context>) -> Result<Action, Error> {
+    let ns = buildkit
+        .namespace()
+        .ok_or(Error::MissingField("namespace"))?;
+    let name = buildkit.name_any();
 
-    let namespace = buildkit.metadata.namespace.as_deref().unwrap_or("default");
-    let deployments: Api<Deployment> = Api::namespaced(ctx.client.clone(), namespace);
-    let existing = deployments.get_opt(deployment_name).await?;
+    // Desired state (must set a controller ownerReference internally)
+    let desired = crate::resources::deployment::build_deployment(&buildkit);
+    let deploy_name = desired.name_any();
 
-    let needs_apply = match existing {
-        None => true,
-        Some(ref current) => {
-            let current_spec = &current.spec;
+    let deployments: Api<Deployment> = Api::namespaced(ctx.client.clone(), &ns);
+    let buildkits: Api<BuildKit> = Api::namespaced(ctx.client.clone(), &ns);
 
-            let replicas = current_spec.replicas;
+    // SSA is idempotent: no diffing, no pre-GET, and it corrects all drift
+    let applied = deployments
+        .patch(
+            &deploy_name,
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(&desired),
+        )
+        .await?;
 
-            let image = current_spec
-                .template
-                .spec
-                .as_ref()
-                .and_then(|pod| pod.containers.first())
-                .and_then(|container| container.image.as_deref());
+    // Status derived from the object returned by the patch
+    let desired_status = crate::status::build_status(&buildkit, &applied);
 
-            let owner_uid = current
-                .metadata
-                .owner_references
-                .as_ref()
-                .and_then(|owners| owners.iter().find(|owner| owner.controller == Some(true)))
-                .map(|owner| owner.uid.as_str());
-
-            replicas != Some(buildkit.spec.replicas)
-                || image != Some(buildkit.spec.image.as_str())
-                || owner_uid != buildkit.metadata.uid.as_deref()
-        }
-    };
-
-    if needs_apply {
-        deployments
-            .patch(
-                deployment_name,
-                &PatchParams::apply("buildkit-operator").force(),
-                &Patch::Apply(&deployment),
-            )
-            .await?;
-        println!("Applied Deployment: {}", deployment_name);
-    } else {
-        println!("Deployment already matches desired state");
-    }
-
-    // Status Update
-    let current_deployment = deployments.get(deployment_name).await?;
-    let deployment_status = current_deployment.status.as_ref();
-
-    let ready_replicas = deployment_status
-        .and_then(|status| status.ready_replicas)
-        .unwrap_or(0);
-
-    println!(
-        "BuildKit {} has {} ready replicas",
-        deployment_name, ready_replicas
-    );
-
-    let name = buildkit.metadata.name.as_deref().unwrap();
-
-    let desired_status = crate::status::build_status(&buildkit, &current_deployment);
-
-    let buildkits: Api<BuildKit> = Api::namespaced(ctx.client.clone(), namespace);
     if buildkit.status.as_ref() != Some(&desired_status) {
         let patch = serde_json::json!({
-            "status": desired_status
+            "apiVersion": BuildKit::api_version(&()),
+            "kind": BuildKit::kind(&()),
+            "status": desired_status,
         });
-
         buildkits
-            .patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))
+            .patch_status(&name, &PatchParams::apply(FIELD_MANAGER).force(), &Patch::Apply(&patch))
             .await?;
-
-        println!("Updated BuildKit conditions: {}", name);
+        info!("updated status");
+    } else {
+        debug!("status unchanged");
     }
 
-    // Ok(Action::await_change())
+    // Owned Deployment changes already trigger reconciles; this is just a safety resync
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-pub fn error_policy(buildkit: Arc<BuildKit>, error: &kube::Error, _ctx: Arc<Context>) -> Action {
-    eprintln!(
-        "Error reconciling {}: {}",
-        buildkit.metadata.name.as_deref().unwrap_or("unknown"),
-        error
-    );
-
+pub fn error_policy(buildkit: Arc<BuildKit>, err: &Error, _ctx: Arc<Context>) -> Action {
+    error!(name = %buildkit.name_any(), error = %err, "reconcile failed");
     Action::requeue(Duration::from_secs(30))
 }
 
 pub async fn run(client: Client) {
     let buildkits: Api<BuildKit> = Api::all(client.clone());
     let deployments: Api<Deployment> = Api::all(client.clone());
-
-    let ctx = Arc::new(Context { client: client });
+    let ctx = Arc::new(Context { client });
 
     Controller::new(buildkits, Config::default())
         .owns(deployments, Config::default())
+        .shutdown_on_signal()
         .run(reconcile, error_policy, ctx)
         .for_each(|res| async move {
             match res {
-                Ok(o) => println!("reconciled {:?}", o),
-                Err(e) => println!("reconcile failed: {:?}", e),
+                Ok((obj, _action)) => debug!(name = %obj.name, "reconciled"),
+                Err(e) => error!(error = %e, "controller error"),
             }
         })
         .await;
