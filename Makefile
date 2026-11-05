@@ -20,7 +20,7 @@ help: ## Show available commands
 
 ##@ Development
 
-dev: ## Run the operator locally
+run: ## Run the operator locally
 	$(CARGO) run --bin $(BIN)
 
 build: ## Build debug binaries

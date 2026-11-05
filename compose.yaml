@@ -1,0 +1,9 @@
+services:
+  operator:
+    build:
+      dockerfile: Dockerfile
+      context: .
+      tags:
+        - buildkit-operator:local
+    volumes:
+      - ${HOME}/.kube/config:/home/nonroot/.kube/config:ro

@@ -1,0 +1,14 @@
+target/
+.git/
+.aws/
+.kube/
+.ssh/
+.env
+.env.*
+.agents/
+.codex/
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo

@@ -5,4 +5,4 @@ metadata:
   namespace: default
 spec:
   image: moby/buildkit:rootless
-  replicas: 1
+  replicas: 3

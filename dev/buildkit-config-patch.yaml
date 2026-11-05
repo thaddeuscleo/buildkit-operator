@@ -1,0 +1,14 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: buildkitd
+          volumeMounts:
+            - name: registry-config
+              mountPath: /etc/buildkit/buildkitd.toml
+              subPath: buildkitd.toml
+              readOnly: true
+      volumes:
+        - name: registry-config
+          configMap:
+            name: buildkit-registry-config

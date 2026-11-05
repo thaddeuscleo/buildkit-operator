@@ -91,6 +91,43 @@ make dev-operator
 
 The operator connects to the Kubernetes API using the credentials discovered by `Client::try_default()`.
 
+#### Run with an in-cluster ServiceAccount
+
+Apply the operator identity and permissions:
+
+```bash
+kubectl apply -f config/rbac.yaml
+```
+
+This creates the `buildkit-operator` ServiceAccount in `default` and binds it to a ClusterRole. The controller watches BuildKit resources and Deployments across all namespaces. Its role permits reading those resources, applying Deployments, patching BuildKit status, and setting blocking owner references.
+
+The operator Deployment in `config/deployment.yaml` uses this ServiceAccount. BuildKit worker Pods do not need it. Local runs continue to use your Kubernetes credentials.
+
+CRD installation requires separate administrator permissions. The operator role grants no access to Secrets, Pods, events, or CRD installation.
+
+#### Build the operator image
+
+Build the image for your Docker host's architecture:
+
+```bash
+docker build -t buildkit-operator:local .
+```
+
+The multistage build compiles only the operator and copies its release binary into a non-root Distroless runtime. Docker BuildKit caches Cargo downloads and compilation artifacts between builds.
+
+Load `buildkit-operator:local` into your Kubernetes cluster. For a registry image, push it and update `image` in `config/deployment.yaml` before deployment.
+
+After installing the CRD and making the image available, deploy the operator using the manifests in `config/`:
+
+```bash
+kubectl apply -f config/
+kubectl rollout status deployment/buildkit-operator -n default
+```
+
+The Deployment runs one replica in `default` with `imagePullPolicy: IfNotPresent`. It uses the `Recreate` strategy to avoid overlapping operator Pods during updates, since the controller has no leader election. Use these same manifests for future deployments.
+
+Set the container's `RUST_LOG` environment variable to override the application's logging defaults. The image contains no shell or `crdgen` binary.
+
 ### 4. Create a BuildKit instance
 
 Create `example.yaml`:
@@ -131,6 +168,10 @@ Check the generated Deployment:
 kubectl get deployment example-buildkit
 kubectl get pods -l app=example
 ```
+
+## Develop with Tilt
+
+Use the [Tilt development guide](dev/README.md) to run the operator and an example BuildKit instance on the development k3s cluster with automatic image rebuilds and Kubernetes rollouts. Complete the one-time registry setup before running `tilt up`.
 
 ## Custom Resource Specification
 

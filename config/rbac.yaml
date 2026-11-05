@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: buildkit-operator
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: buildkit-operator
+rules:
+  - apiGroups: ["buildkit.cleoverse.net"]
+    resources: ["buildkits"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["buildkit.cleoverse.net"]
+    resources: ["buildkits/status"]
+    verbs: ["patch"]
+  # Required for blockOwnerDeletion on managed Deployment owner references.
+  - apiGroups: ["buildkit.cleoverse.net"]
+    resources: ["buildkits/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: buildkit-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: buildkit-operator
+subjects:
+  - kind: ServiceAccount
+    name: buildkit-operator
+    namespace: default
